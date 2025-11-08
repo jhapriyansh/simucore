@@ -83,21 +83,8 @@ Include the following C-style comment block (exact build command and notes) in y
 - WebAssembly threads require `SharedArrayBuffer` and cross-origin isolation; configure your dev/prod server accordingly (Vite can be configured to add the headers).
 - The `.wasm` and worker files must be served from the same origin and with correct MIME types.
 
-## Integration notes (JS)
-
-- Allocate buffers in WASM before generation:
-  - `const posPtr = Module.ccall('wasm_malloc','number',['number'],[bytes])` and same for colors.
-- Call `generate_particles_threads` and read data back using `Module.HEAPF32`:
-  - `const positions = new Float32Array(Module.HEAPF32.buffer, posPtr, written * 3).slice()`
-- Free WASM buffers after copying: `Module.ccall('wasm_free', null, ['number'], [posPtr])`.
-- Seed RNG from JS once after load: `Module.ccall('seed_rng', null, ['number'], [seedValue])`.
-
 ## Tuning tips
 
 - If the cloud is too sparse: decrease `maxProb` or increase `total`.
 - If orbital lobes are clipped: increase `Rmax` (passed via C logic based on `n`).
 - If parallelism is excessive or you need to limit threads: control `PTHREAD_POOL_SIZE` at build time, or limit logical cores in runtime environments.
-
-## Want more?
-
-I can add a `build-wasm.sh` script with the exact emcc command and a short Vite dev-server configuration snippet that injects the cross-origin headers. Tell me if you'd like these added and I will create them.
