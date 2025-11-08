@@ -14,6 +14,7 @@ typedef struct
 {
     uint32_t s;
 } rng_t;
+
 static inline uint32_t xs32(rng_t *r)
 {
     uint32_t x = r->s;
@@ -23,7 +24,11 @@ static inline uint32_t xs32(rng_t *r)
     r->s = x;
     return x;
 }
-static inline float frand(rng_t *r) { return (xs32(r) >> 8) * (1.0f / 16777216.0f); }
+
+static inline float frand(rng_t *r)
+{
+    return (xs32(r) >> 8) * (1.0f / 16777216.0f);
+}
 
 static double facti(int n)
 {
@@ -95,9 +100,11 @@ static double Y_lm(int l, int m, double t, double p, double time)
 {
     int mabs = (m < 0 ? -m : m);
     p += m * 0.8 * time;
+
     double norm = sqrt(((2 * l + 1) * facti(l - mabs)) / (4 * M_PI * facti(l + mabs)));
     double P = P_lm(l, mabs, cos(t));
     double phase = (m == 0) ? 1.0 : (m > 0 ? cos(mabs * p) * M_SQRT2 : sin(mabs * p) * M_SQRT2);
+
     return norm * P * phase;
 }
 
@@ -123,6 +130,7 @@ static void *worker(void *arg)
     Task *T = (Task *)arg;
     rng_t rng = {.s = T->seed};
     int w = 0;
+
     while (w < T->target)
     {
         double r = frand(&rng) * T->Rmax;
@@ -142,14 +150,44 @@ static void *worker(void *arg)
 
             int idx = emscripten_atomic_add_u32((void *)T->writeIndex, 1);
             int base = idx * 3;
-            T->pos[base] = x;
-            T->pos[base + 1] = y;
-            T->pos[base + 2] = z;
 
-            // ✅ BOOSTED COLOR BRIGHTNESS
-            T->col[base] = (s > 0 ? 0.85f : 1.15f);
-            T->col[base + 1] = 0.45f;
-            T->col[base + 2] = (s > 0 ? 1.15f : 0.85f);
+            T->pos[base] = (float)x;
+            T->pos[base + 1] = (float)y;
+            T->pos[base + 2] = (float)z;
+
+            // -------------------------------------------------------
+            // 🌌 Deep Blue ↔ Fluorescent Green Quantum Palette
+            // -------------------------------------------------------
+
+            float phase = (s > 0 ? 1.0f : -1.0f);
+            float tcol = (phase + 1.0f) * 0.5f;
+
+            // Positive ψ → Deep Blue Glow
+            float r_pos = 0.05f; // almost pure blue, no red
+            float g_pos = 0.15f;
+            float b_pos = 1.95f; // deep to electric
+
+            // Negative ψ → Fluorescent Green (popping, not yellow)
+            float r_neg = 0.05f; // keep green pure, no yellow tint
+            float g_neg = 1.85f; // strong neon green
+            float b_neg = 0.25f; // small blue keeps it "toxic-green", not slime-green
+
+            // Smooth lobe-blend transition
+            float rC = r_pos * tcol + r_neg * (1.0f - tcol);
+            float gC = g_pos * tcol + g_neg * (1.0f - tcol);
+            float bC = b_pos * tcol + b_neg * (1.0f - tcol);
+
+            // Neon glow multiplier
+            float boost = 1.4f;
+            rC *= boost;
+            gC *= boost;
+            bC *= boost;
+
+            T->col[base] = rC;
+            T->col[base + 1] = gC;
+            T->col[base + 2] = bC;
+
+            // -------------------------------------------------------
 
             w++;
         }
@@ -158,16 +196,20 @@ static void *worker(void *arg)
 }
 
 static uint32_t GLOBAL_SEED = 1;
-EMSCRIPTEN_KEEPALIVE void seed_rng(uint32_t s) { GLOBAL_SEED = s ? s : 1; }
+
+EMSCRIPTEN_KEEPALIVE void seed_rng(uint32_t s)
+{
+    GLOBAL_SEED = s ? s : 1;
+}
 
 EMSCRIPTEN_KEEPALIVE
 int generate_particles_threads(int n, int l, int m, int total, double t, float *pos, float *col)
 {
     if (total <= 0)
         return 0;
+
     double Rmax = n * n * 3.0;
     double maxProb = 0.0010;
-
     int cores = emscripten_num_logical_cores();
     if (cores < 1)
         cores = 4;
@@ -184,6 +226,7 @@ int generate_particles_threads(int n, int l, int m, int total, double t, float *
         tasks[i] = (Task){n, l, m, take, t, Rmax, maxProb, GLOBAL_SEED ^ (0x9e3779b9u * (i + 1)), pos, col, (int32_t *)&writeIndex};
         pthread_create(&th[i], NULL, worker, &tasks[i]);
     }
+
     for (int i = 0; i < cores; i++)
         pthread_join(th[i], NULL);
 
