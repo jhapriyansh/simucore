@@ -4,28 +4,191 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
-import "./OrbitalVisualizer.css";
 
-import createOrbitalsModule from "../wasm/orbitals.js";
+// IMPORTANT: This is the wasm module we compiled
+import createModule from "../wasm/orbitals.js";
+import "./OrbitalVisualizer.css";
 
 const OrbitalVisualizer = () => {
   const mountRef = useRef(null);
   const sceneRef = useRef(null);
-  const cameraRef = useRef(null);
   const rendererRef = useRef(null);
   const composerRef = useRef(null);
+  const cameraRef = useRef(null);
+  const particlesRef = useRef(null);
   const controlsRef = useRef(null);
   const axesRef = useRef(null);
-  const particlesRef = useRef(null);
-  const timeRef = useRef(0);
 
   const wasmRef = useRef(null);
-  const genRef = useRef(null);
+  const timeRef = useRef(0);
 
   const [orbital, setOrbital] = useState({ n: 1, l: 0, m: 0 });
-  const [numParticles, setNumParticles] = useState(40000);
+  const [numParticles, setNumParticles] = useState(120000);
   const [isRotating, setIsRotating] = useState(true);
   const [showAxes, setShowAxes] = useState(true);
+
+  // Load WASM (with thread support)
+  useEffect(() => {
+    let canceled = false;
+
+    createModule({
+      locateFile: (file) => `/src/wasm/${file}`, // Let Vite serve .wasm next to .js
+    }).then((Module) => {
+      if (canceled) return;
+      wasmRef.current = Module;
+      Module.ccall("seed_rng", null, ["number"], [Date.now() & 0xffffffff]);
+      console.log("✅ WASM (threads) Loaded");
+      generateCloud();
+    });
+
+    return () => {
+      canceled = true;
+    };
+  }, []);
+
+  // Setup scene once
+  useEffect(() => {
+    if (!mountRef.current || sceneRef.current) return;
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x05050a);
+    sceneRef.current = scene;
+
+    const camera = new THREE.PerspectiveCamera(
+      60,
+      mountRef.current.clientWidth / mountRef.current.clientHeight,
+      0.1,
+      300
+    );
+    camera.position.set(20, 18, 20);
+    camera.lookAt(0, 0, 0);
+    cameraRef.current = camera;
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.setSize(
+      mountRef.current.clientWidth,
+      mountRef.current.clientHeight
+    );
+    mountRef.current.appendChild(renderer.domElement);
+    rendererRef.current = renderer;
+
+    // Balanced Bloom — avoids core blowout.
+    const composer = new EffectComposer(renderer);
+    composer.addPass(new RenderPass(scene, camera));
+    composer.addPass(
+      new UnrealBloomPass(new THREE.Vector2(1, 1), 0.35, 0.6, 0.9)
+    );
+    composerRef.current = composer;
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.autoRotate = true;
+    controls.autoRotateSpeed = 0.8;
+    controlsRef.current = controls;
+
+    const axes = new THREE.AxesHelper(8);
+    scene.add(axes);
+    axesRef.current = axes;
+
+    const onResize = () => {
+      if (!mountRef.current) return;
+      const w = mountRef.current.clientWidth;
+      const h = mountRef.current.clientHeight;
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+      renderer.setSize(w, h);
+      composer.setSize(w, h);
+    };
+    window.addEventListener("resize", onResize);
+
+    const animate = () => {
+      timeRef.current += 0.01;
+      controls.update();
+      composer.render();
+      requestAnimationFrame(animate);
+    };
+    animate();
+
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  const generateWASMParticles = () => {
+    const Module = wasmRef.current;
+    if (!Module) return null;
+
+    const count = numParticles;
+    const floats = count * 3;
+    const bytes = floats * 4;
+
+    const posPtr = Module.ccall("wasm_malloc", "number", ["number"], [bytes]);
+    const colPtr = Module.ccall("wasm_malloc", "number", ["number"], [bytes]);
+
+    // THREADS CALL:
+    const written = Module.ccall(
+      "generate_particles_threads",
+      "number",
+      ["number", "number", "number", "number", "number", "number", "number"],
+      [orbital.n, orbital.l, orbital.m, count, timeRef.current, posPtr, colPtr]
+    );
+
+    const positions = new Float32Array(
+      Module.HEAPF32.buffer,
+      posPtr,
+      written * 3
+    ).slice();
+    const colors = new Float32Array(
+      Module.HEAPF32.buffer,
+      colPtr,
+      written * 3
+    ).slice();
+
+    Module.ccall("wasm_free", null, ["number"], [posPtr]);
+    Module.ccall("wasm_free", null, ["number"], [colPtr]);
+
+    return { positions, colors };
+  };
+
+  const generateCloud = () => {
+    if (!sceneRef.current || !wasmRef.current) return;
+
+    if (particlesRef.current) {
+      sceneRef.current.remove(particlesRef.current);
+      particlesRef.current.geometry.dispose();
+      particlesRef.current.material.dispose();
+      particlesRef.current = null;
+    }
+
+    const result = generateWASMParticles();
+    if (!result) return;
+    const { positions, colors } = result;
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+
+    const mat = new THREE.PointsMaterial({
+      size: 0.05,
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.75,
+      blending: THREE.AdditiveBlending,
+      depthTest: true,
+    });
+
+    const pts = new THREE.Points(geo, mat);
+    sceneRef.current.add(pts);
+    particlesRef.current = pts;
+  };
+
+  useEffect(() => generateCloud(), [orbital, numParticles]);
+
+  useEffect(() => {
+    if (controlsRef.current) controlsRef.current.autoRotate = isRotating;
+  }, [isRotating]);
+  useEffect(() => {
+    if (axesRef.current) axesRef.current.visible = showAxes;
+  }, [showAxes]);
 
   const orbitalConfigs = [
     { n: 1, l: 0, m: 0, name: "1s" },
@@ -49,176 +212,10 @@ const OrbitalVisualizer = () => {
     { n: 4, l: 3, m: 3, name: "4f (m=3)" },
   ];
 
-  // Load WASM
-  useEffect(() => {
-    let cancel = false;
-
-    (async () => {
-      const mod = await createOrbitalsModule({
-        locateFile: (file) => new URL(`../wasm/${file}`, import.meta.url).href,
-      });
-      if (cancel) return;
-
-      wasmRef.current = mod;
-
-      genRef.current = mod.cwrap("generate_particles", "number", [
-        "number", // pos ptr
-        "number", // col ptr
-        "number", // count
-        "number", // n
-        "number", // l
-        "number", // m
-        "number", // time
-        "number", // maxProb
-        "number", // rMax
-      ]);
-
-      console.log("✅ WASM SIMD Ready");
-
-      if (sceneRef.current) buildCloud();
-    })();
-
-    return () => {
-      cancel = true;
-    };
-  }, []);
-
-  // Scene setup
-  useEffect(() => {
-    if (!mountRef.current || sceneRef.current) return;
-
-    const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x05050a);
-    sceneRef.current = scene;
-
-    const camera = new THREE.PerspectiveCamera(
-      60,
-      mountRef.current.clientWidth / mountRef.current.clientHeight,
-      0.1,
-      200
-    );
-    camera.position.set(18, 18, 18);
-    camera.lookAt(0, 0, 0);
-    cameraRef.current = camera;
-
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setSize(
-      mountRef.current.clientWidth,
-      mountRef.current.clientHeight
-    );
-    mountRef.current.appendChild(renderer.domElement);
-    rendererRef.current = renderer;
-
-    const composer = new EffectComposer(renderer);
-    composer.addPass(new RenderPass(scene, camera));
-    composer.addPass(
-      new UnrealBloomPass(new THREE.Vector3(1, 1, 1), 1.2, 0.4, 0.85)
-    );
-    composerRef.current = composer;
-
-    const controls = new OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = true;
-    controls.autoRotate = isRotating;
-    controls.autoRotateSpeed = 0.9;
-    controlsRef.current = controls;
-
-    const axes = new THREE.AxesHelper(8);
-    scene.add(axes);
-    axesRef.current = axes;
-
-    const animate = () => {
-      timeRef.current += 0.01;
-      controls.update();
-      composer.render();
-      requestAnimationFrame(animate);
-    };
-    animate();
-
-    if (wasmRef.current) buildCloud();
-  }, []);
-
-  // Rebuild when params change
-  useEffect(() => buildCloud(), [orbital, numParticles]);
-
-  useEffect(() => {
-    if (controlsRef.current) controlsRef.current.autoRotate = isRotating;
-  }, [isRotating]);
-
-  useEffect(() => {
-    if (axesRef.current) axesRef.current.visible = showAxes;
-  }, [showAxes]);
-
-  const generateParticlesWASM = () => {
-    if (!wasmRef.current || !genRef.current) return null;
-
-    const mod = wasmRef.current;
-    const count = numParticles;
-    const floats = count * 3;
-    const bytes = floats * 4;
-
-    const posPtr = mod._malloc(bytes);
-    const colPtr = mod._malloc(bytes);
-
-    const written = genRef.current(
-      posPtr,
-      colPtr,
-      count,
-      orbital.n,
-      orbital.l,
-      orbital.m,
-      timeRef.current,
-      0.0008,
-      orbital.n * orbital.n * 3
-    );
-
-    const posView = new Float32Array(mod.HEAPF32.buffer, posPtr, written * 3);
-    const colView = new Float32Array(mod.HEAPF32.buffer, colPtr, written * 3);
-
-    const positions = new Float32Array(posView);
-    const colors = new Float32Array(colView);
-
-    mod._free(posPtr);
-    mod._free(colPtr);
-
-    return { positions, colors };
-  };
-
-  const buildCloud = () => {
-    if (!sceneRef.current) return;
-
-    if (particlesRef.current) {
-      sceneRef.current.remove(particlesRef.current);
-      particlesRef.current.geometry.dispose();
-      particlesRef.current.material.dispose();
-      particlesRef.current = null;
-    }
-
-    const result = generateParticlesWASM();
-    if (!result) return;
-    const { positions, colors } = result;
-
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-    geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
-
-    const mat = new THREE.PointsMaterial({
-      size: 0.06,
-      vertexColors: true,
-      transparent: true,
-      opacity: 0.9,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-    });
-
-    const pts = new THREE.Points(geo, mat);
-    sceneRef.current.add(pts);
-    particlesRef.current = pts;
-  };
-
   return (
     <div className="visualizer-container">
       <div className="controls-panel">
-        <h1>Hydrogen Orbital Visualizer (WASM + SIMD)</h1>
+        <h1>Hydrogen Orbital Visualizer (WASM + Threads)</h1>
 
         <select
           value={JSON.stringify(orbital)}
@@ -231,12 +228,12 @@ const OrbitalVisualizer = () => {
           ))}
         </select>
 
-        <label>Particles: {numParticles}</label>
+        <label>Particles: {numParticles.toLocaleString()}</label>
         <input
           type="range"
-          min="10000"
-          max="100000"
-          step="10000"
+          min="20000"
+          max="300000"
+          step="20000"
           value={numParticles}
           onChange={(e) => setNumParticles(Number(e.target.value))}
         />
@@ -246,15 +243,16 @@ const OrbitalVisualizer = () => {
             type="checkbox"
             checked={isRotating}
             onChange={(e) => setIsRotating(e.target.checked)}
-          />{" "}
+          />
           Auto Rotate
         </label>
+
         <label>
           <input
             type="checkbox"
             checked={showAxes}
             onChange={(e) => setShowAxes(e.target.checked)}
-          />{" "}
+          />
           Show Axes
         </label>
       </div>
