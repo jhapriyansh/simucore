@@ -56,27 +56,24 @@ Typical interactive particle counts: 20k–300k (adjust depending on CPU and GPU
 
 Include the following C-style comment block (exact build command and notes) in your documentation or run it directly from the project root. Make sure `emcc` is installed and that `src/wasm/` exists before running.
 
-```c
-/*
- * Build command (run from the project root)
- * Requires Emscripten (`emcc`) to be installed and on PATH.
- * Ensure `src/wasm/` directory exists before running — the output is written there.
- *
- * emcc extras/orbitals_threads.c -O3 -pthread -s USE_PTHREADS=1 \
- *   -msimd128 \
- *   -s MODULARIZE=1 -s EXPORT_ES6=1 -s ENVIRONMENT=web \
- *   -s EXPORTED_FUNCTIONS='["_generate_particles_threads","_seed_rng","_wasm_malloc","_wasm_free"]' \
- *   -s EXPORTED_RUNTIME_METHODS='["cwrap","ccall","HEAPF32"]' \
- *   -s PTHREAD_POOL_SIZE=8 \
- *   -o src/wasm/orbitals.js
- *
- * Notes:
- * - The generated `src/wasm/orbitals.js` (and associated `.wasm`) are
- *   consumed by the frontend loader (see `src/components/OrbitalVisualizer.jsx`).
- * - If your environment doesn't support threads, use the single-threaded
- *   variant in `extras/orbitals.c` (different branch/usage).
- */
+
+ Build command (run from the project root)
+ Requires Emscripten (`emcc`) to be installed and on PATH.
+ Ensure `src/wasm/` directory exists before running — the output is written there.
 ```
+ emcc extras/orbitals_threads.c -O3 -pthread -s USE_PTHREADS=1 \
+   -msimd128 \
+   -s MODULARIZE=1 -s EXPORT_ES6=1 -s ENVIRONMENT=web \
+   -s EXPORTED_FUNCTIONS='["_generate_particles_threads","_seed_rng","_wasm_malloc","_wasm_free"]' \
+   -s EXPORTED_RUNTIME_METHODS='["cwrap","ccall","HEAPF32"]' \
+   -s PTHREAD_POOL_SIZE=8 \
+   -o src/wasm/orbitals.js
+```
+ Notes:
+ - The generated `src/wasm/orbitals.js` (and associated `.wasm`) are
+   consumed by the frontend loader (see `src/components/OrbitalVisualizer.jsx`).
+ - If your environment doesn't support threads, use the single-threaded
+   variant in `extras/orbitals.c` (different branch/usage).
 
 ## Browser / server considerations
 
