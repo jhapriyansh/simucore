@@ -10,13 +10,16 @@
   background-color: #1a1a1a;
   padding: 20px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 5rem;
 }
 
 .controls-panel h1 {
   font-size: 24px;
   font-weight: bold;
   color: #ffffff;
-  margin-bottom: 20px;
 }
 
 .controls-grid {
