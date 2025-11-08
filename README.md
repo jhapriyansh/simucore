@@ -53,7 +53,7 @@ Open the URL printed by Vite (usually `http://localhost:5173`) to see the visual
 The numeric core for particle generation lives in `extras/orbitals.c`. Use Emscripten to compile this into a small ES module suitable for browser import. Run the build command from the `extras` folder (the command writes the output to `../src/wasm/orbitals.js`):
 
 1. Ensure `src/wasm` exists (see above).
-2. Change into the `extras` folder and run the Emscripten command (zsh / bash):
+2. Run the Emscripten command (zsh / bash) from the root of the project:
 
 ```bash
 cd extras
