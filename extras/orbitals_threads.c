@@ -1,4 +1,13 @@
-// orbitals_threads.c
+/*
+ * orbitals_threads.c
+ *
+ * Threaded particle generator for hydrogen orbital visualizations.
+ * - Uses Emscripten PThreads to parallelize sample generation.
+ * - Produces positions and colors for a particle cloud representing
+ *   the probability density of hydrogen orbitals (ψ = R_{nl} · Y_{lm}).
+ *
+ * See function comments for details on parameter effects (n, l, m, t, Rmax, maxProb).
+ */
 #include <math.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -30,6 +39,11 @@ static inline float frand(rng_t *r)
     return (xs32(r) >> 8) * (1.0f / 16777216.0f);
 }
 
+/* Factorial with small-n lookup and Stirling fallback.
+ * - Fast lookup for n<=12 for exact values.
+ * - Stirling approximation for larger n to avoid overflow and maintain speed.
+ * Used for normalization constants in spherical harmonics and radial terms.
+ */
 static double facti(int n)
 {
     static const double f[] = {
@@ -40,9 +54,13 @@ static double facti(int n)
     if (n <= 12)
         return f[n];
     double x = (double)n;
+    /* Stirling's approximation for larger n */
     return sqrt(2.0 * M_PI * x) * pow(x / M_E, x);
 }
 
+/* Associated Legendre polynomials for small l values (0..3).
+ * x = cos(theta). We implement only the low-order cases needed by the visualizer.
+ */
 static double P_lm(int l, int mabs, double x)
 {
     double s = sqrt(fmax(0.0, 1.0 - x * x));
@@ -71,6 +89,9 @@ static double P_lm(int l, int mabs, double x)
     return 1.0;
 }
 
+/* Generalized Laguerre polynomial L_p^a(x).
+ * Implemented with a three-term recurrence; used by the radial component R_{nl}.
+ */
 static double gen_laguerre(int p, int a, double x)
 {
     if (p == 0)
@@ -87,6 +108,12 @@ static double gen_laguerre(int p, int a, double x)
     return L1;
 }
 
+/* Radial component R_{nl}(r).
+ * - n: principal quantum number
+ * - l: angular momentum quantum number
+ * - r: radial distance
+ * Returns radial value used in ψ = R·Y.
+ */
 static double R_nl(int n, int l, double r)
 {
     double nf = (double)n;
@@ -96,6 +123,12 @@ static double R_nl(int n, int l, double r)
     return A * exp(-r / nf) * pow(rho, l) * gen_laguerre(n - l - 1, 2 * l + 1, rho);
 }
 
+/* Real spherical harmonic (time-varying azimuthal phase).
+ * - l,m: harmonic indices
+ * - t: polar angle theta
+ * - p: azimuthal angle phi
+ * - time: animation parameter (controls rotation)
+ */
 static double Y_lm(int l, int m, double t, double p, double time)
 {
     int mabs = (m < 0 ? -m : m);
@@ -108,6 +141,9 @@ static double Y_lm(int l, int m, double t, double p, double time)
     return norm * P * phase;
 }
 
+/* Probability density with Jacobian: prob ∝ r^2 * ψ^2
+ * Also return sign of ψ for color mapping.
+ */
 static inline double psi_prob(int n, int l, int m, double r, double t, double p, double time, int *sign)
 {
     double psi = R_nl(n, l, r) * Y_lm(l, m, t, p, time);
@@ -135,17 +171,17 @@ static void *worker(void *arg)
     {
         double r = frand(&rng) * T->Rmax;
         double u = 2.0 * frand(&rng) - 1.0;
-        double t = acos(u);
-        double p = 2.0 * M_PI * frand(&rng);
+        double th = acos(u);
+        double ph = 2.0 * M_PI * frand(&rng);
 
         int s;
-        double prob = psi_prob(T->n, T->l, T->m, r, t, p, T->t, &s);
+        double prob = psi_prob(T->n, T->l, T->m, r, th, ph, T->t, &s);
 
         if (frand(&rng) < prob / T->maxProb)
         {
-            double st = sin(t), ct = cos(t);
-            double x = r * st * cos(p);
-            double y = r * st * sin(p);
+            double st = sin(th), ct = cos(th);
+            double x = r * st * cos(ph);
+            double y = r * st * sin(ph);
             double z = r * ct;
 
             int idx = emscripten_atomic_add_u32((void *)T->writeIndex, 1);
@@ -155,30 +191,26 @@ static void *worker(void *arg)
             T->pos[base + 1] = (float)y;
             T->pos[base + 2] = (float)z;
 
-            // -------------------------------------------------------
-            // 🌌 Deep Blue ↔ Fluorescent Green Quantum Palette
-            // -------------------------------------------------------
+            /* Color mapping for the two ψ sign lobes:
+             * Positive ψ → bluish (83,69,141)
+             * Negative ψ → reddish (147,74,96)
+             * Convert bytes to 0..1 floats, blend by sign and apply a gentle boost.
+             */
+            float tcol = (s > 0 ? 1.0f : 0.0f);
 
-            float phase = (s > 0 ? 1.0f : -1.0f);
-            float tcol = (phase + 1.0f) * 0.5f;
+            float r_pos = 83.0f / 255.0f;
+            float g_pos = 69.0f / 255.0f;
+            float b_pos = 141.0f / 255.0f;
 
-            // Positive ψ → Deep Blue Glow
-            float r_pos = 0.05f; // almost pure blue, no red
-            float g_pos = 0.15f;
-            float b_pos = 1.95f; // deep to electric
+            float r_neg = 147.0f / 255.0f;
+            float g_neg = 74.0f / 255.0f;
+            float b_neg = 96.0f / 255.0f;
 
-            // Negative ψ → Fluorescent Green (popping, not yellow)
-            float r_neg = 0.05f; // keep green pure, no yellow tint
-            float g_neg = 1.85f; // strong neon green
-            float b_neg = 0.25f; // small blue keeps it "toxic-green", not slime-green
-
-            // Smooth lobe-blend transition
             float rC = r_pos * tcol + r_neg * (1.0f - tcol);
             float gC = g_pos * tcol + g_neg * (1.0f - tcol);
             float bC = b_pos * tcol + b_neg * (1.0f - tcol);
 
-            // Neon glow multiplier
-            float boost = 1.4f;
+            float boost = 1.15f; /* visibility boost without neon effect */
             rC *= boost;
             gC *= boost;
             bC *= boost;
@@ -186,8 +218,6 @@ static void *worker(void *arg)
             T->col[base] = rC;
             T->col[base + 1] = gC;
             T->col[base + 2] = bC;
-
-            // -------------------------------------------------------
 
             w++;
         }

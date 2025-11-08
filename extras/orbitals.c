@@ -1,8 +1,24 @@
-// orbitals.c
+/*
+ * orbitals.c
+ *
+ * Single-threaded particle generator for hydrogen orbital visualizations.
+ * This lightweight version is intended for environments without pthread support
+ * (e.g., plain WASM or native builds used for quick testing).
+ *
+ * The implementation provides small-order factorials, associated Legendre
+ * polynomials, Laguerre polynomials, the radial R_{nl} and real spherical
+ * harmonics used to compute ψ and sample points via importance sampling.
+ *
+ * See generate_particles() for parameter effects and recommended ranges.
+ */
+
 #include <math.h>
 #include <stdlib.h>
 
 // --- factorial for small integers ---
+/* Compute factorial for small integers. Used by normalization constants.
+ * For the small n used in the visualizer this simple loop is sufficient.
+ */
 static double fact(int n)
 {
     double r = 1.0;
@@ -12,6 +28,9 @@ static double fact(int n)
 }
 
 // --- Associated Legendre (small l, like JS version) ---
+/* Associated Legendre polynomial values for small l (0..3). x = cos(theta).
+ * Implemented explicitly for low-order cases used by the visualizer.
+ */
 static double P(int l, int mabs, double x)
 {
     if (l == 0)
@@ -42,6 +61,9 @@ static double P(int l, int mabs, double x)
 }
 
 // --- Laguerre L_p^a(x) small p/a ---
+/* Associated Laguerre polynomials L_p^a(x), small p/a implementation.
+ * Used by the radial function R(n,l,r).
+ */
 static double Lag(int p, int a, double x)
 {
     if (p == 0)
@@ -59,6 +81,10 @@ static double Lag(int p, int a, double x)
 }
 
 // --- Radial R_{nl}(r) ---
+/* Radial component R_{nl}(r): controls how ψ varies with radius.
+ * - Larger n -> more extended radial distribution
+ * - Larger l -> additional radial nodes and r^l scaling near zero
+ */
 static double R(int n, int l, double r)
 {
     double num = pow(2.0 / n, 3.0) * fact(n - l - 1);
@@ -69,6 +95,12 @@ static double R(int n, int l, double r)
 }
 
 // --- Real spherical harmonic with phase φ→φ+mωt ---
+/* Real spherical harmonic with time-dependent azimuthal phase.
+ * - l,m: harmonic indices
+ * - th: polar angle (theta)
+ * - ph: azimuthal angle (phi)
+ * - t: animation time (controls rotation via phi += m*omega*t)
+ */
 static double Y(int l, int m, double th, double ph, double t)
 {
     int mabs = (m < 0) ? -m : m;
@@ -83,6 +115,9 @@ static double Y(int l, int m, double th, double ph, double t)
 }
 
 // ψ = R * Y, prob ∝ r²ψ², sign = sign(ψ)
+/* Compute ψ = R·Y and return probability density (including r^2 Jacobian)
+ * and sign of ψ (for color mapping).
+ */
 static void wave(int n, int l, int m, double r, double th, double ph, double t,
                  double *prob, int *sg)
 {
@@ -92,9 +127,22 @@ static void wave(int n, int l, int m, double r, double th, double ph, double t,
 }
 
 // --- RNG ---
+/* Simple RNG wrapper for single-threaded builds. */
 static inline double rnd() { return (double)rand() / RAND_MAX; }
 
 // --- Exported function: fill preallocated buffers ---
+/* Fill provided pos/col buffers with sampled particles representing the
+ * orbital specified by (n,l,m) at time `time`.
+ * - count: number of particles requested
+ * - pos: float array length >= 3*count
+ * - col: float array length >= 3*count
+ *
+ * Notes on parameters/sample configuration:
+ * - Rmax defaults to 3·n² (increase for more spread-out visuals).
+ * - maxP is an importance-sampling upper bound; lowering it makes the
+ *   generator accept fewer samples (denser clouds) while raising it makes
+ *   the cloud sparser.
+ */
 int generate_particles(int n, int l, int m, int count, float time,
                        float *pos, float *col)
 {
