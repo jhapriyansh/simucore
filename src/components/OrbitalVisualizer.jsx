@@ -1,4 +1,3 @@
-// src/components/OrbitalVisualizer.jsx
 import React, { useRef, useEffect, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
@@ -7,8 +6,7 @@ import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
 import "./OrbitalVisualizer.css";
 
-// ---- WASM LOADER ----
-import createWasmModule from "../wasm/orbitals.js";
+import createOrbitalsModule from "../wasm/orbitals.js";
 
 const OrbitalVisualizer = () => {
   const mountRef = useRef(null);
@@ -16,28 +14,76 @@ const OrbitalVisualizer = () => {
   const cameraRef = useRef(null);
   const rendererRef = useRef(null);
   const composerRef = useRef(null);
-  const particlesRef = useRef(null);
-  const axesRef = useRef(null);
   const controlsRef = useRef(null);
+  const axesRef = useRef(null);
+  const particlesRef = useRef(null);
   const timeRef = useRef(0);
+
   const wasmRef = useRef(null);
+  const genRef = useRef(null);
 
   const [orbital, setOrbital] = useState({ n: 1, l: 0, m: 0 });
-  const [numParticles, setNumParticles] = useState(50000);
+  const [numParticles, setNumParticles] = useState(40000);
   const [isRotating, setIsRotating] = useState(true);
   const [showAxes, setShowAxes] = useState(true);
-  const [wasmReady, setWasmReady] = useState(false);
 
-  // ---- Load WASM once ----
+  const orbitalConfigs = [
+    { n: 1, l: 0, m: 0, name: "1s" },
+    { n: 2, l: 0, m: 0, name: "2s" },
+    { n: 2, l: 1, m: -1, name: "2p (m=-1)" },
+    { n: 2, l: 1, m: 0, name: "2p (m=0)" },
+    { n: 2, l: 1, m: 1, name: "2p (m=1)" },
+    { n: 3, l: 0, m: 0, name: "3s" },
+    { n: 3, l: 1, m: 0, name: "3p" },
+    { n: 3, l: 2, m: -2, name: "3d (m=-2)" },
+    { n: 3, l: 2, m: -1, name: "3d (m=-1)" },
+    { n: 3, l: 2, m: 0, name: "3d (m=0)" },
+    { n: 3, l: 2, m: 1, name: "3d (m=1)" },
+    { n: 3, l: 2, m: 2, name: "3d (m=2)" },
+    { n: 4, l: 3, m: -3, name: "4f (m=-3)" },
+    { n: 4, l: 3, m: -2, name: "4f (m=-2)" },
+    { n: 4, l: 3, m: -1, name: "4f (m=-1)" },
+    { n: 4, l: 3, m: 0, name: "4f (m=0)" },
+    { n: 4, l: 3, m: 1, name: "4f (m=1)" },
+    { n: 4, l: 3, m: 2, name: "4f (m=2)" },
+    { n: 4, l: 3, m: 3, name: "4f (m=3)" },
+  ];
+
+  // Load WASM
   useEffect(() => {
+    let cancel = false;
+
     (async () => {
-      wasmRef.current = await createWasmModule();
-      console.log("✅ WASM Loaded");
-      setWasmReady(true); // <-- notify UI + effects
+      const mod = await createOrbitalsModule({
+        locateFile: (file) => new URL(`../wasm/${file}`, import.meta.url).href,
+      });
+      if (cancel) return;
+
+      wasmRef.current = mod;
+
+      genRef.current = mod.cwrap("generate_particles", "number", [
+        "number", // pos ptr
+        "number", // col ptr
+        "number", // count
+        "number", // n
+        "number", // l
+        "number", // m
+        "number", // time
+        "number", // maxProb
+        "number", // rMax
+      ]);
+
+      console.log("✅ WASM SIMD Ready");
+
+      if (sceneRef.current) buildCloud();
     })();
+
+    return () => {
+      cancel = true;
+    };
   }, []);
 
-  // ---- Scene Setup ----
+  // Scene setup
   useEffect(() => {
     if (!mountRef.current || sceneRef.current) return;
 
@@ -86,42 +132,50 @@ const OrbitalVisualizer = () => {
       composer.render();
       requestAnimationFrame(animate);
     };
-
     animate();
+
+    if (wasmRef.current) buildCloud();
   }, []);
 
-  // ---- WASM Particle Generation ----
-  const generateParticlesWASM = (n, l, m, count) => {
+  // Rebuild when params change
+  useEffect(() => buildCloud(), [orbital, numParticles]);
+
+  useEffect(() => {
+    if (controlsRef.current) controlsRef.current.autoRotate = isRotating;
+  }, [isRotating]);
+
+  useEffect(() => {
+    if (axesRef.current) axesRef.current.visible = showAxes;
+  }, [showAxes]);
+
+  const generateParticlesWASM = () => {
+    if (!wasmRef.current || !genRef.current) return null;
+
     const mod = wasmRef.current;
-    if (!mod)
-      return { positions: new Float32Array(0), colors: new Float32Array(0) };
+    const count = numParticles;
+    const floats = count * 3;
+    const bytes = floats * 4;
 
-    const floatCount = count * 3;
-    const posPtr = mod._malloc(floatCount * 4);
-    const colPtr = mod._malloc(floatCount * 4);
+    const posPtr = mod._malloc(bytes);
+    const colPtr = mod._malloc(bytes);
 
-    const gen = mod.cwrap("generate_particles", "number", [
-      "number",
-      "number",
-      "number",
-      "number",
-      "number",
-      "number",
-      "number",
-    ]);
-
-    const written = gen(n, l, m, count, timeRef.current, posPtr, colPtr);
-
-    const positions = new Float32Array(
-      mod.HEAPF32.buffer,
+    const written = genRef.current(
       posPtr,
-      written * 3
-    ).slice();
-    const colors = new Float32Array(
-      mod.HEAPF32.buffer,
       colPtr,
-      written * 3
-    ).slice();
+      count,
+      orbital.n,
+      orbital.l,
+      orbital.m,
+      timeRef.current,
+      0.0008,
+      orbital.n * orbital.n * 3
+    );
+
+    const posView = new Float32Array(mod.HEAPF32.buffer, posPtr, written * 3);
+    const colView = new Float32Array(mod.HEAPF32.buffer, colPtr, written * 3);
+
+    const positions = new Float32Array(posView);
+    const colors = new Float32Array(colView);
 
     mod._free(posPtr);
     mod._free(colPtr);
@@ -129,20 +183,20 @@ const OrbitalVisualizer = () => {
     return { positions, colors };
   };
 
-  // ---- Update Particle Cloud ----
-  useEffect(() => {
-    if (!sceneRef.current || !wasmReady) return;
-    if (particlesRef.current) sceneRef.current.remove(particlesRef.current);
+  const buildCloud = () => {
+    if (!sceneRef.current) return;
 
-    const result = generateParticlesWASM(
-      orbital.n,
-      orbital.l,
-      orbital.m,
-      numParticles
-    );
+    if (particlesRef.current) {
+      sceneRef.current.remove(particlesRef.current);
+      particlesRef.current.geometry.dispose();
+      particlesRef.current.material.dispose();
+      particlesRef.current = null;
+    }
+
+    const result = generateParticlesWASM();
     if (!result) return;
-
     const { positions, colors } = result;
+
     const geo = new THREE.BufferGeometry();
     geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
     geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
@@ -153,48 +207,18 @@ const OrbitalVisualizer = () => {
       transparent: true,
       opacity: 0.9,
       blending: THREE.AdditiveBlending,
+      depthWrite: false,
     });
 
     const pts = new THREE.Points(geo, mat);
     sceneRef.current.add(pts);
     particlesRef.current = pts;
-  }, [orbital, numParticles, wasmReady]);
-
-  // ---- UI Controls ----
-  useEffect(() => {
-    if (controlsRef.current) controlsRef.current.autoRotate = isRotating;
-  }, [isRotating]);
-
-  useEffect(() => {
-    if (axesRef.current) axesRef.current.visible = showAxes;
-  }, [showAxes]);
-
-  const orbitalConfigs = [
-    { n: 1, l: 0, m: 0, name: "1s" },
-    { n: 2, l: 0, m: 0, name: "2s" },
-    { n: 2, l: 1, m: -1, name: "2p (m=-1)" },
-    { n: 2, l: 1, m: 0, name: "2p (m=0)" },
-    { n: 2, l: 1, m: 1, name: "2p (m=1)" },
-    { n: 3, l: 0, m: 0, name: "3s" },
-    { n: 3, l: 1, m: 0, name: "3p" },
-    { n: 3, l: 2, m: -2, name: "3d (m=-2)" },
-    { n: 3, l: 2, m: -1, name: "3d (m=-1)" },
-    { n: 3, l: 2, m: 0, name: "3d (m=0)" },
-    { n: 3, l: 2, m: 1, name: "3d (m=1)" },
-    { n: 3, l: 2, m: 2, name: "3d (m=2)" },
-    { n: 4, l: 3, m: -3, name: "4f (m=-3)" },
-    { n: 4, l: 3, m: -2, name: "4f (m=-2)" },
-    { n: 4, l: 3, m: -1, name: "4f (m=-1)" },
-    { n: 4, l: 3, m: 0, name: "4f (m=0)" },
-    { n: 4, l: 3, m: 1, name: "4f (m=1)" },
-    { n: 4, l: 3, m: 2, name: "4f (m=2)" },
-    { n: 4, l: 3, m: 3, name: "4f (m=3)" },
-  ];
+  };
 
   return (
     <div className="visualizer-container">
       <div className="controls-panel">
-        <h1>Hydrogen Orbital Visualizer (WASM Accelerated)</h1>
+        <h1>Hydrogen Orbital Visualizer (WASM + SIMD)</h1>
 
         <select
           value={JSON.stringify(orbital)}
@@ -214,7 +238,7 @@ const OrbitalVisualizer = () => {
           max="100000"
           step="10000"
           value={numParticles}
-          onChange={(e) => setNumParticles(+e.target.value)}
+          onChange={(e) => setNumParticles(Number(e.target.value))}
         />
 
         <label>
@@ -222,16 +246,15 @@ const OrbitalVisualizer = () => {
             type="checkbox"
             checked={isRotating}
             onChange={(e) => setIsRotating(e.target.checked)}
-          />
+          />{" "}
           Auto Rotate
         </label>
-
         <label>
           <input
             type="checkbox"
             checked={showAxes}
             onChange={(e) => setShowAxes(e.target.checked)}
-          />
+          />{" "}
           Show Axes
         </label>
       </div>
