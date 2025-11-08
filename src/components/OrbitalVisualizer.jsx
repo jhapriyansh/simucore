@@ -51,7 +51,7 @@ const OrbitalVisualizer = () => {
       if (canceled) return;
       wasmRef.current = Module;
       Module.ccall("seed_rng", null, ["number"], [Date.now() & 0xffffffff]);
-      console.log("✅ WASM (threads) Loaded");
+      console.log("WASM (threads) Loaded");
       generateCloud();
     });
 
