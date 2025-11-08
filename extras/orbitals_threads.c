@@ -1,6 +1,4 @@
 // orbitals_threads.c
-// Multi-threaded hydrogen orbital particle generator (WASM + pthreads + SIMD-safe)
-
 #include <math.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -12,7 +10,6 @@
 #define M_PI 3.14159265358979323846
 #endif
 
-// ---------------- RNG ----------------
 typedef struct
 {
     uint32_t s;
@@ -28,7 +25,6 @@ static inline uint32_t xs32(rng_t *r)
 }
 static inline float frand(rng_t *r) { return (xs32(r) >> 8) * (1.0f / 16777216.0f); }
 
-// ---------------- factorial ----------------
 static double facti(int n)
 {
     static const double f[] = {
@@ -38,12 +34,10 @@ static double facti(int n)
         return 1.0;
     if (n <= 12)
         return f[n];
-
     double x = (double)n;
     return sqrt(2.0 * M_PI * x) * pow(x / M_E, x);
 }
 
-// ---------------- Legendre ----------------
 static double P_lm(int l, int mabs, double x)
 {
     double s = sqrt(fmax(0.0, 1.0 - x * x));
@@ -72,7 +66,6 @@ static double P_lm(int l, int mabs, double x)
     return 1.0;
 }
 
-// ---------------- Laguerre ----------------
 static double gen_laguerre(int p, int a, double x)
 {
     if (p == 0)
@@ -82,14 +75,13 @@ static double gen_laguerre(int p, int a, double x)
     double L0 = 1.0, L1 = 1.0 + a - x, Ln;
     for (int k = 2; k <= p; k++)
     {
-        Ln = ((2.0 * k - 1.0 + a - x) * L1 - (k - 1.0 + a) * L0) / (double)k;
+        Ln = ((2.0 * k - 1.0 + a - x) * L1 - (k - 1.0 + a) * L0) / k;
         L0 = L1;
         L1 = Ln;
     }
     return L1;
 }
 
-// ---------------- Radial ----------------
 static double R_nl(int n, int l, double r)
 {
     double nf = (double)n;
@@ -99,21 +91,16 @@ static double R_nl(int n, int l, double r)
     return A * exp(-r / nf) * pow(rho, l) * gen_laguerre(n - l - 1, 2 * l + 1, rho);
 }
 
-// ---------------- Angular ----------------
 static double Y_lm(int l, int m, double t, double p, double time)
 {
     int mabs = (m < 0 ? -m : m);
     p += m * 0.8 * time;
-
     double norm = sqrt(((2 * l + 1) * facti(l - mabs)) / (4 * M_PI * facti(l + mabs)));
     double P = P_lm(l, mabs, cos(t));
-    double phase = (m == 0)  ? 1.0
-                   : (m > 0) ? cos(mabs * p) * M_SQRT2
-                             : sin(mabs * p) * M_SQRT2;
+    double phase = (m == 0) ? 1.0 : (m > 0 ? cos(mabs * p) * M_SQRT2 : sin(mabs * p) * M_SQRT2);
     return norm * P * phase;
 }
 
-// ---------------- Probability ----------------
 static inline double psi_prob(int n, int l, int m, double r, double t, double p, double time, int *sign)
 {
     double psi = R_nl(n, l, r) * Y_lm(l, m, t, p, time);
@@ -121,7 +108,6 @@ static inline double psi_prob(int n, int l, int m, double r, double t, double p,
     return r * r * psi * psi;
 }
 
-// ---------------- Thread task ----------------
 typedef struct
 {
     int n, l, m, target;
@@ -160,10 +146,10 @@ static void *worker(void *arg)
             T->pos[base + 1] = y;
             T->pos[base + 2] = z;
 
-            // Balanced coloring
-            T->col[base] = (s > 0 ? 0.55f : 0.95f);
-            T->col[base + 1] = 0.25f;
-            T->col[base + 2] = (s > 0 ? 0.95f : 0.55f);
+            // ✅ BOOSTED COLOR BRIGHTNESS
+            T->col[base] = (s > 0 ? 0.85f : 1.15f);
+            T->col[base + 1] = 0.45f;
+            T->col[base + 2] = (s > 0 ? 1.15f : 0.85f);
 
             w++;
         }
@@ -171,7 +157,7 @@ static void *worker(void *arg)
     return NULL;
 }
 
-static uint32_t GLOBAL_SEED = 1234567u;
+static uint32_t GLOBAL_SEED = 1;
 EMSCRIPTEN_KEEPALIVE void seed_rng(uint32_t s) { GLOBAL_SEED = s ? s : 1; }
 
 EMSCRIPTEN_KEEPALIVE
@@ -179,9 +165,8 @@ int generate_particles_threads(int n, int l, int m, int total, double t, float *
 {
     if (total <= 0)
         return 0;
-
     double Rmax = n * n * 3.0;
-    double maxProb = 0.0010; // ← balanced, prevents center blowout
+    double maxProb = 0.0010;
 
     int cores = emscripten_num_logical_cores();
     if (cores < 1)
@@ -191,13 +176,12 @@ int generate_particles_threads(int n, int l, int m, int total, double t, float *
     Task tasks[cores];
 
     volatile int32_t writeIndex = 0;
-
     int base = total / cores, rem = total % cores;
+
     for (int i = 0; i < cores; i++)
     {
         int take = base + (i < rem ? 1 : 0);
-        tasks[i] = (Task){
-            .n = n, .l = l, .m = m, .target = take, .t = t, .Rmax = Rmax, .maxProb = maxProb, .seed = GLOBAL_SEED ^ (0x9e3779b9u * (i + 1)), .pos = pos, .col = col, .writeIndex = (int32_t *)&writeIndex};
+        tasks[i] = (Task){n, l, m, take, t, Rmax, maxProb, GLOBAL_SEED ^ (0x9e3779b9u * (i + 1)), pos, col, (int32_t *)&writeIndex};
         pthread_create(&th[i], NULL, worker, &tasks[i]);
     }
     for (int i = 0; i < cores; i++)

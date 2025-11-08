@@ -10,6 +10,6 @@ export default defineConfig({
     },
   },
   build: {
-    target: "esnext", // REQUIRED for thread-enabled WASM
+    target: "esnext",
   },
 });

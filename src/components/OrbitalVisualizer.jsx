@@ -5,7 +5,6 @@ import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
 
-// IMPORTANT: This is the wasm module we compiled
 import createModule from "../wasm/orbitals.js";
 import "./OrbitalVisualizer.css";
 
@@ -27,12 +26,12 @@ const OrbitalVisualizer = () => {
   const [isRotating, setIsRotating] = useState(true);
   const [showAxes, setShowAxes] = useState(true);
 
-  // Load WASM (with thread support)
+  // Load WASM with thread support
   useEffect(() => {
     let canceled = false;
 
     createModule({
-      locateFile: (file) => `/src/wasm/${file}`, // Let Vite serve .wasm next to .js
+      locateFile: (file) => `/src/wasm/${file}`,
     }).then((Module) => {
       if (canceled) return;
       wasmRef.current = Module;
@@ -46,7 +45,7 @@ const OrbitalVisualizer = () => {
     };
   }, []);
 
-  // Setup scene once
+  // Setup scene
   useEffect(() => {
     if (!mountRef.current || sceneRef.current) return;
 
@@ -73,11 +72,11 @@ const OrbitalVisualizer = () => {
     mountRef.current.appendChild(renderer.domElement);
     rendererRef.current = renderer;
 
-    // Balanced Bloom — avoids core blowout.
+    // Slightly increased brightness bloom profile
     const composer = new EffectComposer(renderer);
     composer.addPass(new RenderPass(scene, camera));
     composer.addPass(
-      new UnrealBloomPass(new THREE.Vector2(1, 1), 0.35, 0.6, 0.9)
+      new UnrealBloomPass(new THREE.Vector2(1, 1), 0.55, 0.6, 0.9)
     );
     composerRef.current = composer;
 
@@ -92,7 +91,6 @@ const OrbitalVisualizer = () => {
     axesRef.current = axes;
 
     const onResize = () => {
-      if (!mountRef.current) return;
       const w = mountRef.current.clientWidth;
       const h = mountRef.current.clientHeight;
       camera.aspect = w / h;
@@ -108,6 +106,7 @@ const OrbitalVisualizer = () => {
       composer.render();
       requestAnimationFrame(animate);
     };
+
     animate();
 
     return () => window.removeEventListener("resize", onResize);
@@ -124,7 +123,6 @@ const OrbitalVisualizer = () => {
     const posPtr = Module.ccall("wasm_malloc", "number", ["number"], [bytes]);
     const colPtr = Module.ccall("wasm_malloc", "number", ["number"], [bytes]);
 
-    // THREADS CALL:
     const written = Module.ccall(
       "generate_particles_threads",
       "number",
@@ -132,15 +130,18 @@ const OrbitalVisualizer = () => {
       [orbital.n, orbital.l, orbital.m, count, timeRef.current, posPtr, colPtr]
     );
 
+    // Normalize draw count = exactly the amount user requested
+    const finalWritten = Math.min(written, count);
+
     const positions = new Float32Array(
       Module.HEAPF32.buffer,
       posPtr,
-      written * 3
+      finalWritten * 3
     ).slice();
     const colors = new Float32Array(
       Module.HEAPF32.buffer,
       colPtr,
-      written * 3
+      finalWritten * 3
     ).slice();
 
     Module.ccall("wasm_free", null, ["number"], [posPtr]);
@@ -168,10 +169,10 @@ const OrbitalVisualizer = () => {
     geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
 
     const mat = new THREE.PointsMaterial({
-      size: 0.05,
+      size: 0.055,
       vertexColors: true,
       transparent: true,
-      opacity: 0.75,
+      opacity: 0.9,
       blending: THREE.AdditiveBlending,
       depthTest: true,
     });
@@ -182,7 +183,6 @@ const OrbitalVisualizer = () => {
   };
 
   useEffect(() => generateCloud(), [orbital, numParticles]);
-
   useEffect(() => {
     if (controlsRef.current) controlsRef.current.autoRotate = isRotating;
   }, [isRotating]);
@@ -215,7 +215,7 @@ const OrbitalVisualizer = () => {
   return (
     <div className="visualizer-container">
       <div className="controls-panel">
-        <h1>Hydrogen Orbital Visualizer (WASM + Threads)</h1>
+        <h1>Hydrogen Orbital Visualizer (WASM · SIMD · Threads)</h1>
 
         <select
           value={JSON.stringify(orbital)}
