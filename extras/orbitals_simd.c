@@ -1,4 +1,15 @@
-// orbitals_simd.c (SIMD math + normal 3-float stores to avoid bloom over-brightness)
+/*
+ * Quantum Orbital Visualization using SIMD Instructions
+ *
+ * This module generates 3D visualizations of quantum electron orbitals using SIMD optimization.
+ * Key Parameters:
+ * - n: Principal quantum number (1-5) - Controls orbital size and energy level
+ * - l: Angular momentum (0 to n-1) - Determines orbital shape
+ * - m: Magnetic quantum number (-l to +l) - Controls orbital orientation
+ * - time: Animation parameter for orbital rotation
+ * - maxProb: Maximum probability density - Affects particle density
+ * - rMax: Maximum radius - Controls visualization volume
+ */
 
 #include <emscripten.h>
 #include <math.h>
@@ -31,6 +42,9 @@ void seed_rng(uint32_t s)
     g_state = (s ? s : 0x9E3779B9u);
 }
 
+/* Factorial function optimized for small integers (0-10)
+ * Used in normalization of quantum wavefunctions
+ */
 static inline float fact(int k)
 {
     static const float t[] = {1, 1, 2, 6, 24, 120, 720, 5040, 40320, 362880, 3628800};
@@ -86,6 +100,17 @@ static inline float laguerre(int p, int a, float x)
     return L1;
 }
 
+/*
+ * Calculates radial component of the wavefunction
+ * Parameters:
+ * - n: Principal quantum number (determines orbital size)
+ * - l: Angular momentum quantum number (orbital shape)
+ * - r: Radial distance from nucleus
+ *
+ * This function determines how probability density varies with distance from nucleus.
+ * Higher n = more spread out distribution
+ * Higher l = more complex radial nodes
+ */
 static inline float radial(int n, int l, float r)
 {
     float nf = (float)n;
@@ -93,10 +118,25 @@ static inline float radial(int n, int l, float r)
     return norm * expf(-r / nf) * powf((2.f * r) / nf, (float)l) * laguerre(n - l - 1, 2 * l + 1, (2.f * r) / nf);
 }
 
+/*
+ * Spherical Harmonics calculation for angular component
+ * Parameters:
+ * - l: Angular momentum (orbital shape)
+ * - m: Magnetic quantum number (orbital orientation)
+ * - t: Polar angle theta (0 to π)
+ * - p: Azimuthal angle phi (0 to 2π)
+ * - time: Animation parameter
+ *
+ * Controls the angular distribution and rotation of orbitals:
+ * - l=0: Spherically symmetric (s orbital)
+ * - l=1: Dumbbell shaped (p orbital)
+ * - l=2: More complex shapes (d orbital)
+ * - m affects orientation and rotation pattern
+ */
 static inline float sph_harm(int l, int m, float t, float p, float time)
 {
     int absM = m < 0 ? -m : m;
-    p += (float)m * 0.8f * time;
+    p += (float)m * 0.8f * time; // Rotation speed proportional to m
 
     float norm = sqrtf(((2 * l + 1) * fact(l - absM)) / (4.f * (float)M_PI * fact(l + absM)));
     float P = assoc_legendre(l, absM, cosf(t));
@@ -112,6 +152,27 @@ static inline void wave(int n, int l, int m, float r, float t, float p, float ti
     *sgn = (psi >= 0.f) ? 1 : -1;
 }
 
+/*
+ * Main particle generation function for orbital visualization
+ * Parameters:
+ * - pos: Output array for particle positions (x,y,z triplets)
+ * - col: Output array for particle colors (r,g,b triplets)
+ * - count: Number of particles to generate
+ * - n: Principal quantum number (1-5)
+ *     Higher values = larger orbitals, more complex patterns
+ * - l: Angular momentum (0 to n-1)
+ *     0 = spherical (s orbital)
+ *     1 = dumbbell shape (p orbital)
+ *     2 = complex shapes (d orbital)
+ * - m: Magnetic quantum number (-l to +l)
+ *     Controls orbital orientation and rotation pattern
+ * - time: Animation time parameter
+ *     Affects orbital rotation speed, use 0-2π range
+ * - maxProb: Maximum probability density
+ *     Higher values = sparser particle distribution
+ * - rMax: Maximum radius for particle generation
+ *     Default = 3n² (can be adjusted for visualization)
+ */
 EMSCRIPTEN_KEEPALIVE
 int generate_particles(float *pos, float *col, int count, int n, int l, int m, float time, float maxProb, float rMax)
 {

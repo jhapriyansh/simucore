@@ -1,16 +1,79 @@
-# React + Vite
+# Hydrogen Orbital Visualizer (WASM + SIMD)
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A high-performance 3D visualization of hydrogen atomic orbitals using WebAssembly with SIMD optimizations and Three.js. This project demonstrates quantum mechanical wavefunctions through interactive real-time particle simulations.
 
-Currently, two official plugins are available:
+## Features
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+- Real-time 3D visualization of hydrogen atomic orbitals
+- SIMD-accelerated particle generation using WebAssembly
+- Support for s, p, d, and f orbitals (up to n=4)
+- Interactive orbital selection and parameter adjustment
+- Configurable particle count for performance tuning
+- Bloom post-processing effect for enhanced visualization
+- Orbital auto-rotation and axis display controls
 
-## React Compiler
+## Prerequisites
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- Node.js (v16 or higher)
+- Emscripten SDK (with SIMD support)
+- Git
 
-## Expanding the ESLint configuration
+## Project Setup
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+1. Clone the repository:
+
+```bash
+git clone https://github.com/jhapriyansh/simucore.git
+cd simucore
+```
+
+2. Install dependencies:
+
+```bash
+npm install
+```
+
+3. Compile the WebAssembly module:
+   First, ensure you have the `/src/wasm` directory:
+
+```bash
+mkdir -p src/wasm
+```
+
+Then compile the C code with SIMD optimizations:
+
+```bash
+emcc extras/orbitals_simd.c -O3 -msimd128 \
+ -s MODULARIZE=1 -s EXPORT_ES6=1 -s ENVIRONMENT=web \
+ -s EXPORTED_FUNCTIONS='["_generate_particles","_malloc","_free","_seed_rng"]' \
+ -s EXPORTED_RUNTIME_METHODS='["cwrap","ccall","HEAPF32","getValue","setValue"]' \
+ -o src/wasm/orbitals.js
+```
+
+4. Start the development server:
+
+```bash
+npm run dev
+```
+
+## Usage
+
+- Use the dropdown menu to select different orbital configurations
+- Adjust the particle count slider to balance quality and performance
+- Toggle auto-rotation and axis display using the checkboxes
+- Click and drag to rotate the view manually
+- Scroll to zoom in/out
+
+## Performance Tuning
+
+- Particle count: 10,000 to 100,000 (higher values provide better orbital definition but may impact performance)
+- For slower devices, reduce particle count and disable bloom effects
+- SIMD acceleration significantly improves particle generation performance
+
+## Technology Stack
+
+- React + Vite for the frontend
+- Three.js for 3D graphics
+- WebAssembly with SIMD for particle calculations
+- C for core orbital computation logic
+- Emscripten for C to WebAssembly compilation

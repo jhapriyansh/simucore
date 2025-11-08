@@ -49,7 +49,8 @@ const OrbitalVisualizer = () => {
     { n: 4, l: 3, m: 3, name: "4f (m=3)" },
   ];
 
-  // Load WASM
+  // Initialize WebAssembly module with SIMD support for particle generation
+  // This effect loads and initializes the WASM module that handles quantum orbital calculations
   useEffect(() => {
     let cancel = false;
 
@@ -73,7 +74,7 @@ const OrbitalVisualizer = () => {
         "number", // rMax
       ]);
 
-      console.log("✅ WASM SIMD Ready");
+      console.log("WASM SIMD Ready");
 
       if (sceneRef.current) buildCloud();
     })();
@@ -83,7 +84,11 @@ const OrbitalVisualizer = () => {
     };
   }, []);
 
-  // Scene setup
+  // Initialize Three.js scene, camera, renderer and post-processing effects
+  // - Camera FOV: 60° (increase for wider view, decrease for narrower view)
+  // - Camera position: (18,18,18) (adjust these values to change initial view distance)
+  // - Bloom effect: strength=1.2, radius=0.4, threshold=0.85 (tweak for different glow effects)
+  // - Auto rotation speed: 0.9 (increase/decrease for faster/slower rotation)
   useEffect(() => {
     if (!mountRef.current || sceneRef.current) return;
 
@@ -137,7 +142,10 @@ const OrbitalVisualizer = () => {
     if (wasmRef.current) buildCloud();
   }, []);
 
-  // Rebuild when params change
+  // Regenerate particle cloud when orbital parameters or particle count changes
+  // This rebuilds the visualization when:
+  // - Orbital (n,l,m) values change - affects the shape/size of the orbital
+  // - Number of particles changes - affects visualization density and performance
   useEffect(() => buildCloud(), [orbital, numParticles]);
 
   useEffect(() => {
@@ -148,6 +156,11 @@ const OrbitalVisualizer = () => {
     if (axesRef.current) axesRef.current.visible = showAxes;
   }, [showAxes]);
 
+  // Generate particle positions and colors using WebAssembly for quantum orbital calculation
+  // Critical parameters in genRef.current call:
+  // - maxProb: 0.0008 (probability cutoff - lower = more spread out particles)
+  // - rMax: n*n*3 (maximum radius - increase factor for larger orbitals)
+  // Tweak these values to adjust visualization quality and performance
   const generateParticlesWASM = () => {
     if (!wasmRef.current || !genRef.current) return null;
 
@@ -201,6 +214,10 @@ const OrbitalVisualizer = () => {
     geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
     geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
 
+    // Configure particle material appearance
+    // - size: 0.06 (particle size - increase for larger points)
+    // - opacity: 0.9 (particle transparency - decrease for more ethereal look)
+    // - Uses additive blending for glowing effect
     const mat = new THREE.PointsMaterial({
       size: 0.06,
       vertexColors: true,
